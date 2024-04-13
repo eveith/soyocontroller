@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "soyocontroller"
+version = "0.0.1"
+authors = [
+  { name="Eric MSP Veith", email="eveith@binericien.org" },
+]
+description = "A controller of the SoyoSource grid tie inverter via KlausLi's softwares"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "simple-pid~=2.0.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/eveith/soyocontroller"
+Issues = "https://github.com/pypa/soyocontroller/issues"
+
+[project.scripts]
+soyocontroller = "soyocontroller:main_cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["soyocontroller"]
