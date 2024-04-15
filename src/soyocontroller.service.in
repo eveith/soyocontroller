@@ -1,0 +1,12 @@
+[Unit]
+Description=SoyoSource inverter controller
+After=network.target
+
+[Service]
+User=nobody
+Group=nogroup
+ExecStart=@bindir@/soyocontroller
+EnvironmentFile=@sysconfdir@/default/soyocontroller
+
+[Install]
+WantedBy=multi-user.target
