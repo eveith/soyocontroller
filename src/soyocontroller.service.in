@@ -5,7 +5,7 @@ After=network.target
 [Service]
 User=nobody
 Group=nogroup
-ExecStart=@bindir@/soyocontroller
+ExecStart=@bindir@/soyocontroller --mqtt-server-address=${MQTT_SERVER_ADDRESS} --mqtt-server-port=${MQTT_SERVER_PORT} --mqtt-topic-currentdemand=${MQTT_TOPIC_CURRENTDEMAND} --mqtt-topic-setpoint=${MQTT_TOPIC_SETPOINT} --url-setpoint=${URL_SETPOINT} --inverter-output-limit=${INVERTER_OUTPUT_LIMIT} --output-dampening-factor=${OUTPUT_DAMPENING_FACTOR} --output-dampening-limit=${OUTPUT_DAMPENING_LIMIT} --holdoff=${HOLDOFF}
 EnvironmentFile=@sysconfdir@/default/soyocontroller
 
 [Install]
