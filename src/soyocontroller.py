@@ -197,14 +197,14 @@ def _parse_argv():
         description="Controls a Soyosource grid tie inverter via KlausLi's controller and MQTT",
     )
     argparser.add_argument("--mqtt-server-address", required=True)
-    argparser.add_argument("--mqtt-server-port", default=1883)
+    argparser.add_argument("--mqtt-server-port", default=1883, type=int)
     argparser.add_argument("--mqtt-topic-currentdemand", required=True)
     argparser.add_argument("--mqtt-topic-setpoint", required=False)
     argparser.add_argument("--url-setpoint", required=True)
     argparser.add_argument(
         "--inverter-output-limit", 
         default=900, 
-        type=float,
+        type=int,
         help="Maximum output of the inverter"
     )
     argparser.add_argument(
@@ -222,6 +222,7 @@ def _parse_argv():
     argparser.add_argument(
         "--holdoff",
         default=3, 
+        type=int,
         help="Time in seconds to sleep between adjustments"
     )
     argparser.add_argument(
