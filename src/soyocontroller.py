@@ -162,6 +162,7 @@ class SoyoController:
             time.sleep(self._holdoff_secs)
             if not self._running:
                 break
+            setpoint = 0
             with self._data_semaphore:
                 if self._last_measurement_dt is None:
                     continue
@@ -173,9 +174,6 @@ class SoyoController:
                     self._log.debug("No new data, going back to sleep")
                     continue
                 setpoint = self._calculate_setpoint()
-            if setpoint == self._current_setpoint:
-                self._log.debug("No change in setpoint, not transmitting to controller")
-                continue
             self._current_setpoint = self.set_output(setpoint)   
             self._last_measurement_used_dt = self._last_measurement_dt
         self._log.info("Main loop ended")
