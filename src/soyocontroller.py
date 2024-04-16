@@ -12,6 +12,7 @@ import logging
 import argparse
 import functools
 import threading
+import http.client
 import paho.mqtt.client as mqtt
 
 
@@ -141,7 +142,11 @@ class SoyoController:
                     rsp.msg
                 )
                 break
-            except urllib.error.URLError as e:
+            except (
+                urllib.error.URLError, 
+                http.client.RemoteDisconnected,
+                ConnectionResetError
+            ) as e:
                 self._log.warn("Could not transmit setpoint: %s. Retrying...")
                 time.sleep(1.0)
         if self._mqtt_topic_setpoint and self._mqtt_client is not None:
