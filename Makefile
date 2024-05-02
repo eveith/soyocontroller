@@ -8,8 +8,9 @@ envdir = $(sysconfdir)/default
 
 src/soyocontroller.service: src/soyocontroller.service.in
 	sed \
-		-e 's,@bindir@,$(bindir),g' src/soyocontroller.service.in \
-		-e 's,@sysconfdir@,$(sysconfdir),g' src/soyocontroller.service.in \
+		-e 's,@bindir@,$(bindir),g' \
+		-e 's,@sysconfdir@,$(sysconfdir),g' \
+		src/soyocontroller.service.in \
 	> src/soyocontroller.service
 
 all: src/soyocontroller.service
