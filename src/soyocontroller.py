@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, List
 
 import sys
 import time
 import math
+import json
 import urllib
 import signal
 import logging
@@ -13,7 +14,13 @@ import argparse
 import functools
 import threading
 import http.client
+from datetime import datetime
 import paho.mqtt.client as mqtt
+from collections import deque, namedtuple
+
+
+WattageMeasurement = namedtuple("WattageMeasurement", ["t", "w"])
+VoltageMeasurement = namedtuple("VoltageMeasurement", ["t", "v"])
 
 
 class SoyoController:
@@ -24,10 +31,13 @@ class SoyoController:
         dampening_factor: float,
         dampening_limit: int,
         mqtt_topic_currentdemand: str,
-        url_setpoint: str,
         mqtt_server: str,
-        mqtt_port: int = 1883,
+        battery_voltage_low_cutoff = 0.0,
+        battery_voltage_reconnect = 0.0,
+        url_setpoint: Optional[str] = None,
         mqtt_topic_setpoint: Optional[str] = None,
+        mqtt_topics_epever_chargers: Optional[List[str]] = None,
+        mqtt_port: int = 1883,
     ):
         self._running = True
         self._holdoff_secs = holdoff_secs
@@ -42,18 +52,40 @@ class SoyoController:
         self._url_setpoint = url_setpoint
         self._mqtt_topic_setpoint = mqtt_topic_setpoint
         self._mqtt_topic_currentdemand = mqtt_topic_currentdemand
+        self._mqtt_topics_epever_chargers = (
+            mqtt_topics_epever_chargers if mqtt_topics_epever_chargers 
+            else []
+        )
 
-        self._current_demand = 0.0
-        self._last_measurement_dt = None
-        self._last_measurement_used_dt = None
+        self._battery_voltages = deque(maxlen=5)
+        self._battery_voltage_reconnect = battery_voltage_reconnect
+        self._battery_voltage_low_cutoff = battery_voltage_low_cutoff
+
+        self._demands = deque(maxlen=5)
+        self._last_demand_measurement_used_t = None
+
         self._current_setpoint = 0.0
-        self._data_semaphore = threading.Semaphore()
+        self._current_setpoint_t = None
 
         self._log = logging.getLogger("soyocontroller")
 
+    @property
+    def current_demand(self) -> float:
+        if len(self._demands) == 0:
+            return 0.0
+        if len(self._demands) == 1:
+            return self._demands[-1].w
+        if len(self._demands) == 2:
+            return 0.4 * self._demands[-2].w + 0.6 * self._demands[-1].w
+        return (
+            0.1 * self._demands[-3].w 
+            + 0.3 * self._demands[-2].w 
+            + 0.6 * self._demands[-1].w
+        )
+
     def _subscribe_topics(
         self, 
-        client, 
+        client,
         userdata, 
         flags, 
         reason_code, 
@@ -63,26 +95,71 @@ class SoyoController:
             "Subscribing to MQTT topic: %s", 
             self._mqtt_topic_currentdemand)
         client.subscribe(self._mqtt_topic_currentdemand)
+        for t in self._mqtt_topics_epever_chargers:
+            client.subscribe(t)
 
     def _on_message(self, client, userdata, msg):
         if msg.topic == self._mqtt_topic_currentdemand:
             self.set_current_demand(float(msg.payload))
+        if msg.topic in self._mqtt_topics_epever_chargers:
+            data = json.loads(msg.payload)
+            try:
+                self._battery_voltages.append(
+                    VoltageMeasurement(t=datetime.now(), v=float(data["BatteryV"]))
+                )
+                self._log.debug(
+                    "Current battery voltage: %.2fV", 
+                    self._battery_voltages[-1].v
+                )
+            except KeyError:
+                self._log.warning(
+                    "Epever JSON payload does not contain key 'BatteryV', "
+                    "cannot react to battery state. Payload is: %s",
+                    data
+                )
 
     def set_current_demand(self, demand: float):
         self._log.debug(
             "Demand: %.fW", 
             demand, 
         )
-        with self._data_semaphore:
-            self._current_demand = demand
-            self._last_measurement_dt = time.monotonic()
+        self._demands.append(
+            WattageMeasurement(t=datetime.now(), w=demand)
+        )
 
     def _calculate_setpoint(self) -> int:
-        if self._current_demand < 0 and self._current_setpoint == 0:
+        if self.current_demand < 0.0 and self._current_setpoint == 0:
             return 0  # Nothing to do here
 
+        # Try to cater to the battery's needs:
+
+        if (
+            len(self._battery_voltages) > 0 
+            and self._battery_voltages[-1].v 
+                <= self._battery_voltage_low_cutoff
+        ):
+            self._log.info(
+                "Battery at low voltage cutoff: %.2fV <= %.f2V",
+                self._battery_voltages[-1].v,
+                self._battery_voltage_low_cutoff
+            )
+            return 0  # Low discharge protection
+        if (
+            len(self._battery_voltages) > 1
+            and self._battery_voltages[-1].v >= self._battery_voltages[-2].v
+            and self._battery_voltages[-1].v < self._battery_voltage_reconnect
+        ):
+            self._log.info(
+                "Battery recharging: %s, "
+                "below reconnect voltage: %.2fV <= %.2fV",
+                self._battery_voltages,
+                self._battery_voltages[-1].v,
+                self._battery_voltage_reconnect
+            )
+            return 0  # Let the battery recharge
+
         demand_to_consider = min(
-            self._current_demand,
+            self.current_demand,
             self._inverter_limits[1],
             self._inverter_limits[1] - self._current_setpoint
         )
@@ -97,12 +174,13 @@ class SoyoController:
             0,
             self._current_setpoint + setpoint_delta
         )
+        setpoint = int(setpoint)
 
         self._log.info(
-            "Current demand: %.fW, "
-            "demand to consider: %.fW, "
+            "Current demand: %.fW"
+            " demand to consider: %.fW, "
             "setpoint = %dW + %dW = %dW",
-            self._current_demand,
+            self.current_demand,
             demand_to_consider,
             self._current_setpoint,
             setpoint_delta,
@@ -110,22 +188,19 @@ class SoyoController:
         )
         return setpoint
 
-    def set_output(self, setpoint: int) -> int:
-        output = int(setpoint)
+    def set_output(self, setpoint: int):
         self._log.info(
             "Adjusting setpoint: %dW => %dW",
             self._current_setpoint,
-            output,
+            setpoint,
         )
-        setpoint = max(
-            min(
-                self._current_setpoint + output, 
-                self._inverter_limits[1]
-            ),
-            0
-        )
-        setpoint = output
+        if self._mqtt_topic_setpoint and self._mqtt_client is not None:
+            self._mqtt_client.publish(self._mqtt_topic_setpoint, setpoint)
+        if self._url_setpoint:
+            self._set_output_http(setpoint)
+        self._current_setpoint_t = datetime.now()
 
+    def _set_output_http(self, setpoint: int):
         while True:
             try:
                 rsp = urllib.request.urlopen(
@@ -149,9 +224,6 @@ class SoyoController:
             ) as e:
                 self._log.warn("Could not transmit setpoint: %s. Retrying...")
                 time.sleep(1.0)
-        if self._mqtt_topic_setpoint and self._mqtt_client is not None:
-            self._mqtt_client.publish(self._mqtt_topic_setpoint, setpoint)
-        return setpoint
 
 
     def run(self):
@@ -164,23 +236,32 @@ class SoyoController:
         self._mqtt_client.loop_start()
 
         while self._running:
-            time.sleep(self._holdoff_secs)
+            time.sleep(0.1)
             if not self._running:
                 break
-            setpoint = 0
-            with self._data_semaphore:
-                if self._last_measurement_dt is None:
-                    continue
-                    self._log.debug("No data available yet, going back to sleep")
-                if (
-                    self._last_measurement_used_dt is not None 
-                    and self._last_measurement_dt == self._last_measurement_used_dt
-                ):
-                    self._log.debug("No new data, going back to sleep")
-                    continue
-                setpoint = self._calculate_setpoint()
-            self._current_setpoint = self.set_output(setpoint)   
-            self._last_measurement_used_dt = self._last_measurement_dt
+            if len(self._demands) == 0:
+                self._log.debug("No data available yet, going back to sleep")
+                continue
+            if self._demands[-1].t == self._last_demand_measurement_used_t:
+                self._log.debug("Stale data, waiting...")
+                continue
+            now = datetime.now()
+            if (
+                self._current_setpoint_t is not None
+                and (
+                    (now - self._current_setpoint_t).seconds 
+                    <= self._holdoff_secs
+                )
+            ):
+                self._log.debug(
+                    "Holding off, only %s elapsed...", 
+                    (now-self._current_setpoint_t)
+                )
+                continue
+            setpoint = self._calculate_setpoint()
+            self.set_output(setpoint)
+            self._current_setpoint = setpoint
+            self._last_demand_measurement_used_t = self._demands[-1].t
         self._log.info("Main loop ended")
 
     def stop(self):
@@ -203,7 +284,19 @@ def _parse_argv():
     argparser.add_argument("--mqtt-server-port", default=1883, type=int)
     argparser.add_argument("--mqtt-topic-currentdemand", required=True)
     argparser.add_argument("--mqtt-topic-setpoint", required=False)
-    argparser.add_argument("--url-setpoint", required=True)
+    argparser.add_argument(
+        "--mqtt-topic-epever-charger", 
+        action="append", 
+        required=False, 
+        help="MQTT topics of Epever charger(s), can be given multiple times"
+    )
+    argparser.add_argument(
+        "--url-setpoint", 
+        action="store",
+        type=str,
+        required=False,
+        help="URL to HTTP GET the setpoint to",
+    )
     argparser.add_argument(
         "--inverter-output-limit", 
         default=900, 
@@ -227,6 +320,20 @@ def _parse_argv():
         default=3, 
         type=int,
         help="Time in seconds to sleep between adjustments"
+    )
+    argparser.add_argument(
+        "--battery-low-cutoff-voltage",
+        type=float,
+        default=0.0,
+        required=False,
+        help="Voltage value below which the inverter will stop feed-in"
+    )
+    argparser.add_argument(
+        "--battery-reconnect-voltage",
+        type=float,
+        required=False,
+        default=0.0,
+        help="Voltage at which the inverter re-connects after recharging",
     )
     argparser.add_argument(
         "--debug", 
@@ -255,10 +362,13 @@ def main():
         mqtt_port=args.mqtt_server_port,
         mqtt_topic_currentdemand=args.mqtt_topic_currentdemand,
         mqtt_topic_setpoint=args.mqtt_topic_setpoint,
+        mqtt_topics_epever_chargers=args.mqtt_topic_epever_charger,
         url_setpoint=args.url_setpoint,
         dampening_factor=args.output_dampening_factor,
         dampening_limit=args.output_dampening_limit,
         holdoff_secs=int(args.holdoff),
+        battery_voltage_low_cutoff=args.battery_low_cutoff_voltage,
+        battery_voltage_reconnect=args.battery_reconnect_voltage,
     )
 
     sighandler = functools.partial(_sighandler_stop, controller=controller)
