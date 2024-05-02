@@ -58,6 +58,7 @@ class SoyoController:
         )
 
         self._battery_voltages = deque(maxlen=5)
+        self._battery_is_recharging = False
         self._battery_voltage_reconnect = battery_voltage_reconnect
         self._battery_voltage_low_cutoff = battery_voltage_low_cutoff
 
@@ -143,9 +144,11 @@ class SoyoController:
                 self._battery_voltages[-1].v,
                 self._battery_voltage_low_cutoff
             )
+            self._battery_is_recharging = True
             return 0  # Low discharge protection
         if (
-            len(self._battery_voltages) > 1
+            self._battery_is_recharging
+            and len(self._battery_voltages) > 1
             and self._battery_voltages[-1].v >= self._battery_voltages[-2].v
             and self._battery_voltages[-1].v < self._battery_voltage_reconnect
         ):
