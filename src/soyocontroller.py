@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 import sys
 import time
@@ -58,7 +58,7 @@ class SoyoController:
         )
 
         self._battery_voltages = deque(maxlen=5)
-        self._battery_is_recharging = False
+        self._in_battery_recharge_pause = False
         self._battery_voltage_reconnect = battery_voltage_reconnect
         self._battery_voltage_low_cutoff = battery_voltage_low_cutoff
 
@@ -101,22 +101,23 @@ class SoyoController:
 
     def _on_message(self, client, userdata, msg):
         if msg.topic == self._mqtt_topic_currentdemand:
-            self.set_current_demand(float(msg.payload))
-        if msg.topic in self._mqtt_topics_epever_chargers:
-            data = json.loads(msg.payload)
             try:
-                self._battery_voltages.append(
-                    VoltageMeasurement(t=datetime.now(), v=float(data["BatteryV"]))
+                self.set_current_demand(float(msg.payload))
+            except Exception as e:
+                self._log.warn(
+                    "Could not set current demand: %s - %s; ignoring.", 
+                    msg.payload,
+                    e
                 )
-                self._log.debug(
-                    "Current battery voltage: %.2fV", 
-                    self._battery_voltages[-1].v
-                )
-            except KeyError:
-                self._log.warning(
-                    "Epever JSON payload does not contain key 'BatteryV', "
-                    "cannot react to battery state. Payload is: %s",
-                    data
+        if msg.topic in self._mqtt_topics_epever_chargers:
+            try:
+                data = json.loads(msg.payload)
+                self.set_battery_state(data)
+            except Exception as e:
+                self._log.warn(
+                    "Could not read Epever data: %s - %s, ignoring.",
+                    msg.payload,
+                    e,
                 )
 
     def set_current_demand(self, demand: float):
@@ -128,30 +129,52 @@ class SoyoController:
             WattageMeasurement(t=datetime.now(), w=demand)
         )
 
+    def set_battery_state(self, state: Dict):
+        try:
+            self._battery_voltages.append(
+                VoltageMeasurement(t=datetime.now(), v=float(state["BatteryV"]))
+            )
+            self._log.debug(
+                "Current battery voltage: %.2fV", 
+                self._battery_voltages[-1].v
+            )
+            if (
+                len(self._battery_voltages) == 1
+                and self._battery_voltages[-1].v 
+                    <= self._battery_voltage_low_cutoff
+                or len(self._battery_voltages) > 1
+                and self._battery_voltages[-1].v 
+                    <= self._battery_voltage_low_cutoff
+                and self._battery_voltages[-2].v 
+                    <= self._battery_voltage_low_cutoff
+            ):
+                self._log.info(
+                    "Battery at low voltage cutoff: %.2fV <= %.2fV",
+                    self._battery_voltages[-1].v,
+                    self._battery_voltage_low_cutoff
+                )
+                self._in_battery_recharge_pause = True
+            if (
+                self._in_battery_recharge_pause
+                and len(self._battery_voltages) > 1
+                and self._battery_voltages[-1].v >= self._battery_voltages[-2].v
+                and self._battery_voltages[-1].v < self._battery_voltage_reconnect
+            ):
+                self_in_battery_recharge_pause = True
+            if self._battery_voltages[-1].v >= self._battery_voltage_reconnect:
+                self._in_battery_recharge_pause = False
+
+        except KeyError:
+            self._log.warning(
+                "Epever JSON payload does not contain key 'BatteryV', "
+                "cannot react to battery state. Payload is: %s",
+                state
+            )
+
     def _calculate_setpoint(self) -> int:
         if self.current_demand < 0.0 and self._current_setpoint == 0:
             return 0  # Nothing to do here
-
-        # Try to cater to the battery's needs:
-
-        if (
-            len(self._battery_voltages) > 0 
-            and self._battery_voltages[-1].v 
-                <= self._battery_voltage_low_cutoff
-        ):
-            self._log.info(
-                "Battery at low voltage cutoff: %.2fV <= %.f2V",
-                self._battery_voltages[-1].v,
-                self._battery_voltage_low_cutoff
-            )
-            self._battery_is_recharging = True
-            return 0  # Low discharge protection
-        if (
-            self._battery_is_recharging
-            and len(self._battery_voltages) > 1
-            and self._battery_voltages[-1].v >= self._battery_voltages[-2].v
-            and self._battery_voltages[-1].v < self._battery_voltage_reconnect
-        ):
+        if self._in_battery_recharge_pause:  # Low discharge protection
             self._log.info(
                 "Battery recharging: %s, "
                 "below reconnect voltage: %.2fV <= %.2fV",

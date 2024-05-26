@@ -7,6 +7,7 @@ DynamicUser=yes
 ExecStart=
 ExecStart=@bindir@/soyocontroller --mqtt-server-address=${MQTT_SERVER_ADDRESS} --mqtt-server-port=${MQTT_SERVER_PORT} --mqtt-topic-currentdemand=${MQTT_TOPIC_CURRENTDEMAND} --mqtt-topic-epever-charger=${MQTT_TOPIC_EPEVER_CHARGER} --mqtt-topic-setpoint=${MQTT_TOPIC_SETPOINT} --url-setpoint=${URL_SETPOINT} --inverter-output-limit=${INVERTER_OUTPUT_LIMIT} --output-dampening-factor=${OUTPUT_DAMPENING_FACTOR} --output-dampening-limit=${OUTPUT_DAMPENING_LIMIT} --holdoff=${HOLDOFF} --battery-low-cutoff-voltage=${BATTERY_LOW_CUTOFF_VOLTAGE} --battery-reconnect-voltage=${BATTERY_RECONNECT_VOLTAGE}
 EnvironmentFile=@sysconfdir@/default/soyocontroller
+Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
