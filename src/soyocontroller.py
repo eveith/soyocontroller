@@ -175,7 +175,7 @@ class SoyoController:
         if self.current_demand < 0.0 and self._current_setpoint == 0:
             return 0  # Nothing to do here
         if self._in_battery_recharge_pause:  # Low discharge protection
-            self._log.info(
+            self._log.debug(
                 "Battery recharging: %s, "
                 "below reconnect voltage: %.2fV <= %.2fV",
                 self._battery_voltages,
@@ -202,7 +202,7 @@ class SoyoController:
         )
         setpoint = int(setpoint)
 
-        self._log.info(
+        self._log.debug(
             "Current demand: %.fW"
             " demand to consider: %.fW, "
             "setpoint = %dW + %dW = %dW",
@@ -215,7 +215,7 @@ class SoyoController:
         return setpoint
 
     def set_output(self, setpoint: int):
-        self._log.info(
+        self._log.debug(
             "Adjusting setpoint: %dW => %dW",
             self._current_setpoint,
             setpoint,
