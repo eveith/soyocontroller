@@ -241,8 +241,8 @@ class SoyoController:
                     urllib.request.Request(
                         url=f"{self._url_setpoint}?Value={setpoint}",
                         method='GET',
-                        timeout=self._holdoff_secs
-                    )
+                    ),
+                    timeout=self._holdoff_secs
                 )
                 self._log.debug(
                     "Sent '%d' '%s', got HTTP/%s back: %s", 
