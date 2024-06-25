@@ -14,6 +14,7 @@ import argparse
 import functools
 import threading
 import http.client
+from socket import timeout
 from datetime import datetime
 import paho.mqtt.client as mqtt
 from collections import deque, namedtuple
@@ -34,6 +35,7 @@ class SoyoController:
         mqtt_server: str,
         battery_voltage_low_cutoff = 0.0,
         battery_voltage_reconnect = 0.0,
+        negative_hysteresis=-30.0,
         url_setpoint: Optional[str] = None,
         mqtt_topic_setpoint: Optional[str] = None,
         mqtt_topics_epever_chargers: Optional[List[str]] = None,
@@ -44,6 +46,7 @@ class SoyoController:
         self._dampening_limit = dampening_limit
         self._dampening_factor = dampening_factor
         self._inverter_limits = inverter_output_limits
+        self._negative_hysteresis = negative_hysteresis
 
         self._mqtt_server_address = mqtt_server
         self._mqtt_server_port = mqtt_port
@@ -163,7 +166,6 @@ class SoyoController:
                 self_in_battery_recharge_pause = True
             if self._battery_voltages[-1].v >= self._battery_voltage_reconnect:
                 self._in_battery_recharge_pause = False
-
         except KeyError:
             self._log.warning(
                 "Epever JSON payload does not contain key 'BatteryV', "
@@ -189,6 +191,11 @@ class SoyoController:
             self._inverter_limits[1],
             self._inverter_limits[1] - self._current_setpoint
         )
+        if (
+            demand_to_consider < 0.0 
+            and demand_to_consider >= self._negative_hysteresis
+        ):
+            demand_to_consider = 0.0
         setpoint_delta = demand_to_consider
         if setpoint_delta > self._dampening_limit:
             setpoint_delta *= self._dampening_factor  # Don't overshoot
@@ -228,11 +235,13 @@ class SoyoController:
 
     def _set_output_http(self, setpoint: int):
         while True:
+            http_get_start_t = datetime.now()
             try:
                 rsp = urllib.request.urlopen(
                     urllib.request.Request(
                         url=f"{self._url_setpoint}?Value={setpoint}",
-                        method='GET'
+                        method='GET',
+                        timeout=self._holdoff_secs
                     )
                 )
                 self._log.debug(
@@ -248,8 +257,19 @@ class SoyoController:
                 http.client.RemoteDisconnected,
                 ConnectionResetError
             ) as e:
+                if (
+                    isinstance(error.reason, timeout)
+                    and self._demands[-1].t > http_get_start_t
+                ):
+                    self._log.warn(
+                        "Timeout while transmitting setpoint via HTTP, "
+                        "but new data is already available (%s > %s), "
+                        "skipping retry.",
+                        self._demands[-1].t,
+                        http_get_start_t
+                    )
+                    break
                 self._log.warn("Could not transmit setpoint: %s. Retrying...")
-                time.sleep(1.0)
 
 
     def run(self):
@@ -362,6 +382,13 @@ def _parse_argv():
         help="Voltage at which the inverter re-connects after recharging",
     )
     argparser.add_argument(
+        "--negative-hysteresis",
+        type=float,
+        default=-30.0,
+        required=False,
+        help="Don't readjust until grid feed-back drops below this wattage",
+    )
+    argparser.add_argument(
         "--debug", 
         action="store_true", 
         help="Enable debugging output"
@@ -395,6 +422,7 @@ def main():
         holdoff_secs=int(args.holdoff),
         battery_voltage_low_cutoff=args.battery_low_cutoff_voltage,
         battery_voltage_reconnect=args.battery_reconnect_voltage,
+        negative_hysteresis=args.negative_hysteresis,
     )
 
     sighandler = functools.partial(_sighandler_stop, controller=controller)
