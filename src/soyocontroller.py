@@ -384,7 +384,7 @@ def _parse_argv():
     argparser.add_argument(
         "--negative-hysteresis",
         type=float,
-        default=-30.0,
+        default=-50.0,
         required=False,
         help="Don't readjust until grid feed-back drops below this wattage",
     )
