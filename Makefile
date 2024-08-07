@@ -20,6 +20,7 @@ clean:
 
 install: all
 	install -D -m 0755 src/soyocontroller.py $(DESTDIR)$(bindir)/soyocontroller
+	install -D -m 0755 src/sml2mqtt.py $(DESTDIR)$(bindir)/sml2mqtt
 	install -D -m 0644 src/soyocontroller.service $(DESTDIR)/lib/systemd/system
 	install -D -m 0644 src/soyocontroller.env $(DESTDIR)$(sysconfdir)/default/soyocontroller
 
