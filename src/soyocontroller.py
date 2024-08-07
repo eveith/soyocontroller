@@ -197,7 +197,9 @@ class SoyoController:
         ):
             demand_to_consider = 0.0
         setpoint_delta = demand_to_consider
-        if setpoint_delta > self._dampening_limit:
+        if setpoint_delta < 0.0:  # Try to stay within acceptable backfeed
+            setpoint_delta -= self._negative_hysteresis * 0.5 
+        if setpoint_delta > self._dampening_limit and setpoint_delta < 300:
             setpoint_delta *= self._dampening_factor  # Don't overshoot
         setpoint = min(
             self._inverter_limits[1],
@@ -255,10 +257,17 @@ class SoyoController:
             except (
                 urllib.error.URLError, 
                 http.client.RemoteDisconnected,
-                ConnectionResetError
+                ConnectionResetError,
+                TimeoutError
             ) as e:
                 if (
-                    isinstance(error.reason, timeout)
+                    (
+                        isinstance(e, TimeoutError)
+                        or (
+                            isinstance(e, urllib.error.URLError)
+                            and isinstance(e.reason, timeout)
+                        )
+                    )
                     and self._demands[-1].t > http_get_start_t
                 ):
                     self._log.warn(
@@ -422,7 +431,10 @@ def main():
         holdoff_secs=int(args.holdoff),
         battery_voltage_low_cutoff=args.battery_low_cutoff_voltage,
         battery_voltage_reconnect=args.battery_reconnect_voltage,
-        negative_hysteresis=args.negative_hysteresis,
+        negative_hysteresis=(
+            args.negative_hysteresis if args.negative_hysteresis <= 0.0
+            else -args.negative_hysteresis
+        ),
     )
 
     sighandler = functools.partial(_sighandler_stop, controller=controller)
