@@ -268,6 +268,7 @@ class SoyoController:
                             and isinstance(e.reason, timeout)
                         )
                     )
+                    and len(self._demands) > 0
                     and self._demands[-1].t > http_get_start_t
                 ):
                     self._log.warn(
