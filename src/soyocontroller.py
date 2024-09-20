@@ -96,10 +96,14 @@ class SoyoController:
         properties
     ):
         self._log.info(
-            "Subscribing to MQTT topic: %s", 
+            "Subscribing to MQTT topic for current demand: %s", 
             self._mqtt_topic_currentdemand)
         client.subscribe(self._mqtt_topic_currentdemand)
         for t in self._mqtt_topics_epever_chargers:
+            self._log.info(
+                "Subscribing to MQTT topic for charger state: %s",
+                t
+            )
             client.subscribe(t)
 
     def _on_message(self, client, userdata, msg):
@@ -107,7 +111,7 @@ class SoyoController:
             try:
                 self.set_current_demand(float(msg.payload))
             except Exception as e:
-                self._log.warn(
+                self._log.warning(
                     "Could not set current demand: %s - %s; ignoring.", 
                     msg.payload,
                     e
@@ -117,7 +121,7 @@ class SoyoController:
                 data = json.loads(msg.payload)
                 self.set_battery_state(data)
             except Exception as e:
-                self._log.warn(
+                self._log.warning(
                     "Could not read Epever data: %s - %s, ignoring.",
                     msg.payload,
                     e,
@@ -166,6 +170,10 @@ class SoyoController:
                 self_in_battery_recharge_pause = True
             if self._battery_voltages[-1].v >= self._battery_voltage_reconnect:
                 self._in_battery_recharge_pause = False
+                self._log.info(
+                    "Reconnecting battery at %.2fV", 
+                    self._battery_voltages[-1].v
+                )
         except KeyError:
             self._log.warning(
                 "Epever JSON payload does not contain key 'BatteryV', "
@@ -229,10 +237,15 @@ class SoyoController:
             self._current_setpoint,
             setpoint,
         )
+        if self._url_setpoint:
+            try:
+                self._set_output_http(setpoint)
+            except:  # Whatever happens, we return here.
+                return
+        # Transmit setpoint via MQTT only if the above worked,
+        # or if we should not set via HTTP at all:
         if self._mqtt_topic_setpoint and self._mqtt_client is not None:
             self._mqtt_client.publish(self._mqtt_topic_setpoint, setpoint)
-        if self._url_setpoint:
-            self._set_output_http(setpoint)
         self._current_setpoint_t = datetime.now()
 
     def _set_output_http(self, setpoint: int):
@@ -244,7 +257,7 @@ class SoyoController:
                         url=f"{self._url_setpoint}?Value={setpoint}",
                         method='GET',
                     ),
-                    timeout=self._holdoff_secs
+                    timeout=self._holdoff_secs * 2
                 )
                 self._log.debug(
                     "Sent '%d' '%s', got HTTP/%s back: %s", 
@@ -271,15 +284,20 @@ class SoyoController:
                     and len(self._demands) > 0
                     and self._demands[-1].t > http_get_start_t
                 ):
-                    self._log.warn(
+                    self._log.warning(
                         "Timeout while transmitting setpoint via HTTP, "
                         "but new data is already available (%s > %s), "
                         "skipping retry.",
                         self._demands[-1].t,
                         http_get_start_t
                     )
-                    break
-                self._log.warn("Could not transmit setpoint: %s. Retrying...")
+                    raise
+                self._log.warning(
+                    "Could not transmit setpoint %s for time %s: %s. Retrying...",
+                    setpoint,
+                    http_get_start_t,
+                    e,
+                )
 
 
     def run(self):
