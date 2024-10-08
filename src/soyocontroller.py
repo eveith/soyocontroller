@@ -145,15 +145,42 @@ class SoyoController:
                 "Current battery voltage: %.2fV", 
                 self._battery_voltages[-1].v
             )
+
+            battery_voltages = [x.v for x in self._battery_voltages]
+            
+            # Check if we have a battery voltage at all,
+            # and enact safeguards if not:
+
             if (
-                len(self._battery_voltages) == 1
-                and self._battery_voltages[-1].v 
-                    <= self._battery_voltage_low_cutoff
-                or len(self._battery_voltages) > 1
-                and self._battery_voltages[-1].v 
-                    <= self._battery_voltage_low_cutoff
-                and self._battery_voltages[-2].v 
-                    <= self._battery_voltage_low_cutoff
+                len(battery_voltages) > 0
+                and self._battery_voltages[-1].v == 0.0
+            ):
+                self._log.info(
+                    "Battery seems to be disconnected, stopping feed-in."
+                )
+                self._in_battery_recharge_pause = True
+                return
+
+            # Reconnect the battery if present again:
+
+            if (
+                any(v == 0.0 for v in battery_voltages)
+                and len(battery_voltages) > 0
+                and battery_voltages[-1] > self._battery_voltage_low_cutoff
+            ):
+                self._log.info("Battery reconnected.")
+                self._in_battery_recharge_pause = False
+                return
+
+            # Check for low-voltage cutoff:
+
+            if (
+                all(
+                    v <= self._battery_voltage_low_cutoff
+                    for v in battery_voltages[
+                        -min(2, self._battery_voltages.maxlen):
+                    ]
+                )
             ):
                 self._log.info(
                     "Battery at low voltage cutoff: %.2fV <= %.2fV",
@@ -161,13 +188,20 @@ class SoyoController:
                     self._battery_voltage_low_cutoff
                 )
                 self._in_battery_recharge_pause = True
+                return
+                
+            # Don't reconnect if we're still charging:
+
             if (
                 self._in_battery_recharge_pause
-                and len(self._battery_voltages) > 1
-                and self._battery_voltages[-1].v >= self._battery_voltages[-2].v
-                and self._battery_voltages[-1].v < self._battery_voltage_reconnect
+                and len(battery_voltages) > 1
+                and battery_voltages[-1].v >= battery_voltages[-2].v
+                and battery_voltages[-1].v < self._battery_voltage_reconnect
             ):
-                self_in_battery_recharge_pause = True
+                self._in_battery_recharge_pause = True
+
+            # Check reconnect after cutoff:
+
             if self._battery_voltages[-1].v >= self._battery_voltage_reconnect:
                 self._in_battery_recharge_pause = False
                 self._log.info(
