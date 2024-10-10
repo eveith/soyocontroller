@@ -153,7 +153,7 @@ class SoyoController:
 
             if (
                 len(battery_voltages) > 0
-                and self._battery_voltages[-1].v == 0.0
+                and battery_voltages[-1] == 0.0
             ):
                 self._log.info(
                     "Battery seems to be disconnected, stopping feed-in."
@@ -195,14 +195,14 @@ class SoyoController:
             if (
                 self._in_battery_recharge_pause
                 and len(battery_voltages) > 1
-                and battery_voltages[-1].v >= battery_voltages[-2].v
-                and battery_voltages[-1].v < self._battery_voltage_reconnect
+                and battery_voltages[-1] >= battery_voltages[-2]
+                and battery_voltages[-1] < self._battery_voltage_reconnect
             ):
                 self._in_battery_recharge_pause = True
 
             # Check reconnect after cutoff:
 
-            if self._battery_voltages[-1].v >= self._battery_voltage_reconnect:
+            if battery_voltages[-1] >= self._battery_voltage_reconnect:
                 self._in_battery_recharge_pause = False
                 self._log.info(
                     "Reconnecting battery at %.2fV", 
