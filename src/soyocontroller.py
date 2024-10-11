@@ -61,6 +61,7 @@ class SoyoController:
         )
 
         self._battery_voltages = deque(maxlen=5)
+        self._battery_connected = True
         self._in_battery_recharge_pause = False
         self._battery_voltage_reconnect = battery_voltage_reconnect
         self._battery_voltage_low_cutoff = battery_voltage_low_cutoff
@@ -85,6 +86,13 @@ class SoyoController:
             0.1 * self._demands[-3].w 
             + 0.3 * self._demands[-2].w 
             + 0.6 * self._demands[-1].w
+        )
+
+    @property
+    def can_feed_in(self) -> bool:
+        return (
+            self._battery_connected 
+            and not self._in_battery_recharge_pause
         )
 
     def _subscribe_topics(
@@ -158,7 +166,7 @@ class SoyoController:
                 self._log.info(
                     "Battery seems to be disconnected, stopping feed-in."
                 )
-                self._in_battery_recharge_pause = True
+                self._battery_connected = False
                 return
 
             # Reconnect the battery if present again:
@@ -169,7 +177,7 @@ class SoyoController:
                 and battery_voltages[-1] > self._battery_voltage_low_cutoff
             ):
                 self._log.info("Battery reconnected.")
-                self._in_battery_recharge_pause = False
+                self._battery_connected = True
                 return
 
             # Check for low-voltage cutoff:
@@ -193,7 +201,7 @@ class SoyoController:
             # Don't reconnect if we're still charging:
 
             if (
-                self._in_battery_recharge_pause
+                not self.can_feed_in
                 and len(battery_voltages) > 1
                 and battery_voltages[-1] >= battery_voltages[-2]
                 and battery_voltages[-1] < self._battery_voltage_reconnect
@@ -218,10 +226,12 @@ class SoyoController:
     def _calculate_setpoint(self) -> int:
         if self.current_demand < 0.0 and self._current_setpoint == 0:
             return 0  # Nothing to do here
-        if self._in_battery_recharge_pause:  # Low discharge protection
+        if not self.can_feed_in:  # Low discharge protection
             self._log.debug(
-                "Battery recharging: %s, "
+                "Cannot feed in. Battery connected: %s, "
+                "recharging: %s, "
                 "below reconnect voltage: %.2fV <= %.2fV",
+                self._battery_connected,
                 self._battery_voltages,
                 self._battery_voltages[-1].v,
                 self._battery_voltage_reconnect
