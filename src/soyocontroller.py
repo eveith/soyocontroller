@@ -276,6 +276,14 @@ class SoyoController:
         return setpoint
 
     def set_output(self, setpoint: int):
+        if setpoint == self._current_setpoint:
+            self._log.debug(
+                "Not transmitting the same setpoint again; "
+                "setpoint is %.2f, calculated at %s",
+                self._current_setpoint,
+                self._current_setpoint_t,
+            )
+            return
         self._log.debug(
             "Adjusting setpoint: %dW => %dW",
             self._current_setpoint,
@@ -290,6 +298,7 @@ class SoyoController:
         # or if we should not set via HTTP at all:
         if self._mqtt_topic_setpoint and self._mqtt_client is not None:
             self._mqtt_client.publish(self._mqtt_topic_setpoint, setpoint)
+        self._current_setpoint = setpoint
         self._current_setpoint_t = datetime.now()
 
     def _set_output_http(self, setpoint: int):
@@ -378,7 +387,6 @@ class SoyoController:
                 continue
             setpoint = self._calculate_setpoint()
             self.set_output(setpoint)
-            self._current_setpoint = setpoint
             self._last_demand_measurement_used_t = self._demands[-1].t
         self._log.info("Main loop ended")
 
