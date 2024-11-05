@@ -32,6 +32,7 @@ class SoyoController:
         dampening_factor: float,
         dampening_limit: int,
         mqtt_topic_currentdemand: str,
+        mqtt_topic_soyodata: str,
         mqtt_server: str,
         battery_voltage_low_cutoff = 0.0,
         battery_voltage_reconnect = 0.0,
@@ -53,12 +54,15 @@ class SoyoController:
         self._mqtt_client = None
 
         self._url_setpoint = url_setpoint
+        self._mqtt_topic_soyodata = mqtt_topic_soyodata
         self._mqtt_topic_setpoint = mqtt_topic_setpoint
         self._mqtt_topic_currentdemand = mqtt_topic_currentdemand
         self._mqtt_topics_epever_chargers = (
             mqtt_topics_epever_chargers if mqtt_topics_epever_chargers 
             else []
         )
+
+        self._soyo_state_data = {}
 
         self._battery_voltages = deque(maxlen=5)
         self._battery_connected = True
@@ -105,14 +109,20 @@ class SoyoController:
     ):
         self._log.info(
             "Subscribing to MQTT topic for current demand: %s", 
-            self._mqtt_topic_currentdemand)
+            self._mqtt_topic_currentdemand
+        )
         client.subscribe(self._mqtt_topic_currentdemand)
+        self._log.info(
+            "Subscribing to Soyosource state data topic: %s",
+            self._mqtt_topic_soyodata
+        )
         for t in self._mqtt_topics_epever_chargers:
             self._log.info(
                 "Subscribing to MQTT topic for charger state: %s",
                 t
             )
             client.subscribe(t)
+
 
     def _on_message(self, client, userdata, msg):
         if msg.topic == self._mqtt_topic_currentdemand:
@@ -134,6 +144,19 @@ class SoyoController:
                     msg.payload,
                     e,
                 )
+        if msg.topic == self._mqtt_topic_soyodata:
+            try:
+                data = json.loads(msg.payload)
+                if type(data) != dict:
+                    raise RuntimeError("not a dict")
+                self._soyo_state_data.update(data)
+            except Exception as e:
+                self._log.warning(
+                    "Could not read Soyosource controller state data: %s - %s, ignoring.",
+                    msg.payload,
+                    e,
+                )
+
 
     def set_current_demand(self, demand: float):
         self._log.debug(
@@ -276,7 +299,19 @@ class SoyoController:
         return setpoint
 
     def set_output(self, setpoint: int):
-        if setpoint == self._current_setpoint:
+        controller_start_t = None
+        try:
+            controller_start_t = datetime(
+                *(time.strptime(self._soyo_state_data["StartTime"])[0:6])
+            )
+        except (KeyError, ValueError):
+            pass
+        if (
+            setpoint != 0
+            and setpoint == self._current_setpoint
+            and controller_start_t is not None
+            and controller_start_t < self._current_setpoint_t
+        ):
             self._log.debug(
                 "Not transmitting the same setpoint again; "
                 "setpoint is %.2f, calculated at %s",
@@ -284,6 +319,7 @@ class SoyoController:
                 self._current_setpoint_t,
             )
             return
+
         self._log.debug(
             "Adjusting setpoint: %dW => %dW",
             self._current_setpoint,
@@ -336,6 +372,7 @@ class SoyoController:
                     )
                     and len(self._demands) > 0
                     and self._demands[-1].t > http_get_start_t
+                    and setpoint != 0  # Setpoint 0 needs to go through always
                 ):
                     self._log.warning(
                         "Timeout while transmitting setpoint via HTTP, "
@@ -409,6 +446,12 @@ def _parse_argv():
     argparser.add_argument("--mqtt-server-address", required=True)
     argparser.add_argument("--mqtt-server-port", default=1883, type=int)
     argparser.add_argument("--mqtt-topic-currentdemand", required=True)
+    argparser.add_argument(
+        "--mqtt-topic-soyodata",
+        required=True,
+        help="MQTT topic to which the Soyosource controller "
+             "publishes current state data"
+    )
     argparser.add_argument("--mqtt-topic-setpoint", required=False)
     argparser.add_argument(
         "--mqtt-topic-epever-charger", 
@@ -494,6 +537,7 @@ def main():
         mqtt_server=args.mqtt_server_address,
         mqtt_port=args.mqtt_server_port,
         mqtt_topic_currentdemand=args.mqtt_topic_currentdemand,
+        mqtt_topic_soyodata=args.mqtt_topic_soyodata,
         mqtt_topic_setpoint=args.mqtt_topic_setpoint,
         mqtt_topics_epever_chargers=args.mqtt_topic_epever_charger,
         url_setpoint=args.url_setpoint,
